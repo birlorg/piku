@@ -394,6 +394,8 @@ def do_deploy(app, deltas={}, newrev=None):
                 workers.pop("preflight", None)
             if exists(join(app_path, 'requirements.txt')) and found_app("Python"):
                 settings.update(deploy_python(app, deltas))
+            if exists(join(app_path, 'pyproject.tomle')) and found_app("Python"):
+                settings.update(deploy_poetry(app, deltas))
             elif exists(join(app_path, 'Gemfile')) and found_app("Ruby Application") and check_requirements(['ruby', 'gem', 'bundle']):
                 settings.update(deploy_ruby(app, deltas))
             elif exists(join(app_path, 'package.json')) and found_app("Node") and (
@@ -642,7 +644,44 @@ def deploy_node(app, deltas={}):
             call('npm install --prefix {} --package-lock=false'.format(npm_prefix), cwd=join(APP_ROOT, app), env=env, shell=True)
     return spawn_app(app, deltas)
 
+def deploy_poetry(app, deltas={}):
+    """Deploy a Python poetry application
+    Used for debugging, make sure CWD is correct: 
+    python3 -c "from subprocess import run;print(run('poetry env info --path',capture_output=True,shell=True).stdout.strip().decode('utf-8'))"
+    """
+    first_time = False
+    virtualenv_path = join(ENV_ROOT, app)
+    symlink_path = join(APP_ROOT,app,'.venv')
+    if not exists(symlink_path):
+        first_time = True
+        symlink(virtualenv_path,symlink_path,target_is_directory=True)
+    requirements = join(APP_ROOT, app, 'pyproject.toml')
+    env_file = join(APP_ROOT, app, 'ENV')
+    # Set unbuffered output and readable UTF-8 mapping
+    env = {
+        'POETRY_VIRTUALENVS_IN_PROJECT':'1',
+        'PYTHONUNBUFFERED': '1',
+        'PYTHONIOENCODING': 'UTF_8:replace'
+    }
+    if exists(env_file):
+        env.update(parse_settings(env_file, env))
+    # Install dependencies for poetry
+    #echo("----> virtualenv path at:{}".format(virtualenv_path), fg='green')
+    if not exists(virtualenv_path):
+        first_time = True
+        call("poetry install", cwd=join(APP_ROOT,app),env=env,shell=True)
+    # TODO: improve version parsing
+    # pylint: disable=unused-variable
+    version = int(env.get("PYTHON_VERSION", "3"))
 
+    activation_script = join(virtualenv_path, 'bin', 'activate_this.py')
+    exec(open(activation_script).read(), dict(__file__=activation_script))
+
+    if first_time or getmtime(requirements) > getmtime(virtualenv_path):
+        echo("-----> Running poetry install for '{}'".format(app), fg='green')
+        call('poetry install', cwd=virtualenv_path, shell=True)
+    return spawn_app(app, deltas)
+    
 def deploy_python(app, deltas={}):
     """Deploy a Python application"""
 
